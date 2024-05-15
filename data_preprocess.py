@@ -434,10 +434,7 @@ def load_tasks(meta_stage: str, task_pairs: list, dataname: str = None, K_shot=N
         task_2_support = './dataset/{}/induced_graphs/task{}.meta.{}.support'.format(dataname, task_2, meta_stage)
         task_2_query = './dataset/{}/induced_graphs/task{}.meta.{}.query'.format(dataname, task_2, meta_stage)
 
-        with (open(task_1_support, 'br') as t1s,
-              open(task_1_query, 'br') as t1q,
-              open(task_2_support, 'br') as t2s,
-              open(task_2_query, 'br') as t2q):
+        with open(task_1_support, 'br') as t1s,open(task_1_query, 'br') as t1q,open(task_2_support, 'br') as t2s,open(task_2_query, 'br') as t2q:
             t1s_dic, t2s_dic = pk.load(t1s), pk.load(t2s)
             support = induced_graph_2_K_shot(t1s_dic, t2s_dic, dataname, K=K_shot, seed=seed)
 
@@ -449,7 +446,7 @@ def load_tasks(meta_stage: str, task_pairs: list, dataname: str = None, K_shot=N
 
 
 if __name__ == '__main__':
-    dataname = 'Computers'  # 'CiteSeer'  # 'PubMed' 'Cora'
+    dataname = 'CiteSeer'  # 'CiteSeer'  # 'PubMed' 'Cora'
     #
     # if dataname in ['CiteSeer', 'PubMed', 'Cora']:
     #     dataset = Planetoid(root='./dataset/', name=dataname)
@@ -469,7 +466,7 @@ if __name__ == '__main__':
     # data = feature_reduce(data)
     # pk.dump(data, open('./dataset/{}/feature_reduced.data'.format(dataname), 'bw'))
 
-    data = pk.load(open('./dataset/{}/feature_reduced.data'.format(dataname), 'br'))
+    data = pk.load(open('./Dataset/{}/feature_reduced.data'.format(dataname), 'br'))
     node_classes=10
     # # step2 split node and edge
     #

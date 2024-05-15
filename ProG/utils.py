@@ -10,9 +10,8 @@ import pickle as pk
 from torch_geometric.utils import to_undirected
 from torch_geometric.loader.cluster import ClusterData
 from torch import nn, optim
-
 import torch.nn.functional as F
-
+import pickle
 
 seed = 0
 
@@ -45,14 +44,19 @@ def gen_ran_output(data, model):
         else:
             vice_model_param.data = param.data + 0.1 * torch.normal(0, torch.ones_like(
                 param.data) * param.data.std())
-    z2 = vice_model.forward_cl(data.x, data.edge_index, data.batch)
+    if model.gnn.gnn_type == "CGCNN":
+        z2 = vice_model.forward_cl_cgcnn(data.x, data.edge_index, data.edge_attr, data.batch)
+    elif model.gnn.gnn_type == "deeperGAT":
+        z2 = vice_model.forward_cl_deeperGAT(data.x, data.edge_index, data.edge_attr, data.glob_feat, data.batch)
+    else:
+        z2 = vice_model.forward_cl(data.x, data.edge_index, data.batch)
 
     return z2
 
 
 # used in pre_train.py
 def load_data4pretrain(dataname='CiteSeer', num_parts=200):
-    data = pk.load(open('../Dataset/{}/feature_reduced.data'.format(dataname), 'br'))
+    data = pk.load(open('./Dataset/{}/feature_reduced.data'.format(dataname), 'br'))
     print(data)
 
     x = data.x.detach()
@@ -61,10 +65,70 @@ def load_data4pretrain(dataname='CiteSeer', num_parts=200):
     data = Data(x=x, edge_index=edge_index)
     input_dim = data.x.shape[1]
     hid_dim = input_dim
-    graph_list = list(ClusterData(data=data, num_parts=num_parts, save_dir='../Dataset/{}/'.format(dataname)))
+    graph_list = list(ClusterData(data=data, num_parts=num_parts, save_dir='./Dataset/{}/'.format(dataname)))
 
+    # 输出图的个数
+    print(f"图的个数：{len(graph_list)}")
+
+    # 输出前5个图
+    for i in range(5):
+        print(graph_list[i])
     return graph_list, input_dim, hid_dim
 
+def restore_data(data, slices):
+    restored_data_list = []
+
+    # 假设所有图都有节点特征x
+    # 根据x属性的分片信息，计算图的数量
+    num_graphs = slices['x'].size(0) - 1
+
+    for i in range(num_graphs):
+        single_data_dict = {}
+        
+        # 注意这里的修改：使用data.keys()而不是data.keys
+        for key in data.keys():
+            item = slices[key]
+            # 为每个属性获取对应的分片范围
+            start, stop = item[i].item(), item[i + 1].item()
+
+            # 特别处理edge_index
+            if key == 'edge_index':
+                edge_index = data[key][:, start:stop]
+                # 调整edge_index为相对索引
+                edge_index = edge_index - edge_index.min()
+                single_data_dict[key] = edge_index
+            else:
+                # 处理其他属性
+                single_data_dict[key] = data[key][start:stop]
+
+        restored_data_list.append(Data(**single_data_dict))
+    
+    return restored_data_list
+
+
+# used in pre_train.py,load matbench data
+def load_mbdata4pretrain(dataname):
+    # with open('./Dataset/{}/{}.pkl'.format(dataname,dataname), 'rb') as file:
+    #     dataset = pk.load(file)
+    data, slice = torch.load('./Dataset/{}/{}.pt'.format(dataname,dataname))
+    dataset = restore_data(data, slice)
+
+    # with open(f'./Dataset/{dataname}/{dataname}.pkl', "wb") as file:
+    #     pickle.dump(dataset, file)
+    #     print(f'Dataset {dataname} saved.')
+    # dataset 是一个包含多个 Data 对象的列表
+    # 计算输入维度和隐藏层维度
+    input_dim = dataset[0].x.shape[1]  # 假设所有图的特征维度都相同
+    hid_dim = 100  # 你可以根据需要调整隐藏层维度
+    
+    # 输出图的个数
+    print(f"图的个数：{len(dataset)}")
+    
+    # 输出前5个图
+    for i in range(5):
+        print(dataset[i])
+    
+    return dataset, input_dim, hid_dim
 
 # used in prompt.py
 def act(x=None, act_type='leakyrelu'):
@@ -211,12 +275,36 @@ def drop_nodes(data, aug_ratio):
 
     edge_index = data.edge_index.numpy()
 
-    edge_index = [[idx_dict[edge_index[0, n]], idx_dict[edge_index[1, n]]] for n in range(edge_num) if
-                  (not edge_index[0, n] in idx_drop) and (not edge_index[1, n] in idx_drop)]
+    # edge_index = [[idx_dict[edge_index[0, n]], idx_dict[edge_index[1, n]]] for n in range(edge_num) if
+    #               (not edge_index[0, n] in idx_drop) and (not edge_index[1, n] in idx_drop)]
+    
+    # 初始设为空列表，用于存储更新后的边索引
+    new_edge_index = []
+    # 如果存在边属性，同样设为空列表，用于存储更新后的边属性
+    new_edge_attr = [] if data.edge_attr is not None else None
+    for n in range(edge_num):
+        if edge_index[0, n] not in idx_drop and edge_index[1, n] not in idx_drop:
+            # 仅当两个节点都未被删除时，保留该边
+            new_edge_index.append([idx_dict[edge_index[0, n]], idx_dict[edge_index[1, n]]])
+            if new_edge_attr is not None:
+                # 同步更新边属性
+                new_edge_attr.append(data.edge_attr[n])
+
     try:
-        data.edge_index = torch.tensor(edge_index).transpose_(0, 1)
+        data.edge_index = torch.tensor(new_edge_index).transpose_(0, 1)
         data.x = data.x[idx_nondrop]
-    except:
+        if new_edge_attr is not None:
+            data.edge_attr = torch.stack(new_edge_attr)
+
+        # 对节点位置pos进行更新
+        if data.pos is not None:
+            data.pos = data.pos[idx_nondrop]
+
+        # 对全局特征glob_feat进行更新
+        if data.glob_feat is not None:
+            data.glob_feat = data.glob_feat[idx_nondrop]
+    except Exception as e:
+        print(f"Error in drop_nodes: {e}")
         data = data
 
     return data
@@ -233,6 +321,10 @@ def permute_edges(data, aug_ratio):
 
     idx_delete = np.random.choice(edge_num, (edge_num - permute_num), replace=False)
     data.edge_index = data.edge_index[:, idx_delete]
+
+    # 如果存在edge_attr，则同样只保留选中的边对应的属性
+    if hasattr(data, 'edge_attr') and data.edge_attr is not None:
+        data.edge_attr = data.edge_attr[idx_delete]
 
     return data
 

@@ -6,3 +6,7 @@ __pycache__/data_preprocess.cpython-39.pyc
 *.pyc
 .DS_Store
 
+Dataset/matbench_*/
+Dataset/all_in_one/*
+Dataset/CiteSeer/*
+Dataset/preprocess_data/data/*

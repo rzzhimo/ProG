@@ -4,6 +4,7 @@ from random import shuffle
 
 from torch_geometric.data import Batch
 from collections import defaultdict
+from .utils import restore_data
 
 
 def multi_class_NIG(dataname, num_class,shots=100):
@@ -21,7 +22,7 @@ def multi_class_NIG(dataname, num_class,shots=100):
         data_path1 = './Dataset/{}/induced_graphs/task{}.meta.train.support'.format(dataname, task_id)
         data_path2 = './Dataset/{}/induced_graphs/task{}.meta.train.query'.format(dataname, task_id)
 
-        with (open(data_path1, 'br') as f1, open(data_path2, 'br') as f2):
+        with open(data_path1, 'br') as f1, open(data_path2, 'br') as f2:
             list1, list2 = pk.load(f1)['pos'], pk.load(f2)['pos']
             data_list = list1 + list2
             data_list = data_list[0:shots]
@@ -39,7 +40,7 @@ def multi_class_NIG(dataname, num_class,shots=100):
         data_path1 = './Dataset/{}/induced_graphs/task{}.meta.test.support'.format(dataname, task_id)
         data_path2 = './Dataset/{}/induced_graphs/task{}.meta.test.query'.format(dataname, task_id)
 
-        with (open(data_path1, 'br') as f1, open(data_path2, 'br') as f2):
+        with open(data_path1, 'br') as f1, open(data_path2, 'br') as f2:
             list1, list2 = pk.load(f1)['pos'], pk.load(f2)['pos']
             data_list = list1 + list2
             data_list = data_list[0:shots]
@@ -58,6 +59,74 @@ def multi_class_NIG(dataname, num_class,shots=100):
 
     return train_data, test_data, train_list,test_list
 
+def regression_matbench(dataname, shots=100, train_rate=0):
+    """
+    Load matbench_dielectric dataset for regression tasks.
+    
+    :param dataname: Name of the dataset, e.g. 'matbench_dielectric'
+    :param shots: Number of samples for training set
+    :return: train_data, test_data, train_list, test_list
+    """
+    # Load the dataset from .pkl file
+    # with open('Dataset/{}/{}.pkl'.format(dataname, dataname), 'rb') as file:
+    #     dataset = pk.load(file)
+
+    # Load the dataset from .pt file
+    data, slice = torch.load('Dataset/{}/{}.pt'.format(dataname, dataname))
+    dataset = restore_data(data, slice)
+
+    # Shuffle the dataset
+    shuffle(dataset)
+
+    if train_rate == 0:
+        train_list = dataset[:shots]
+        test_list = dataset[shots:shots*10]
+    else:
+        train_shots = int(len(dataset)*train_rate)
+        train_list = dataset[:train_shots]
+        test_list = dataset[train_shots:]
+
+    # Convert lists of Data objects into Batch objects
+    train_data = Batch.from_data_list(train_list)
+    test_data = Batch.from_data_list(test_list)
+
+    print("Training set: {} graphs".format(len(train_list)))
+    print("Testing set: {} graphs".format(len(test_list)))
+
+    return train_data, test_data, train_list, test_list
+
+    
+def binary_class_matbench(dataname, shots=100, train_rate=0):
+    """
+    Load matbench_dielectric dataset for class tasks.
+    
+    :param dataname: Name of the dataset, e.g. 'matbench_dielectric'
+    :param shots: Number of samples for training set
+    :return: train_data, test_data, train_list, test_list
+    """
+    # Load the dataset from .pkl file
+    data, slice = torch.load('Dataset/{}/{}.pt'.format(dataname, dataname))
+    dataset = restore_data(data, slice)
+
+    # Shuffle the dataset
+    shuffle(dataset)
+
+    if train_rate == 0:
+        train_list = dataset[:shots]
+        test_list = dataset[shots:shots*10]
+    else:
+        train_shots = int(len(dataset)*train_rate)
+        train_list = dataset[:train_shots]
+        test_list = dataset[train_shots:]
+
+    # Convert lists of Data objects into Batch objects
+    train_data = Batch.from_data_list(train_list)
+    test_data = Batch.from_data_list(test_list)
+
+    print("Training set: {} graphs".format(len(train_list)))
+    print("Testing set: {} graphs".format(len(test_list)))
+
+    return train_data, test_data, train_list, test_list
 
 if __name__ == '__main__':
     pass

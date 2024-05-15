@@ -4,7 +4,7 @@
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/old" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.9 (metalearn)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="deepverse" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

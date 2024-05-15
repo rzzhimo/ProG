@@ -57,7 +57,7 @@ def meta_test_adam(meta_test_task_id_list,
                     running_loss = 0.
 
         test_model.eval()
-        acc_f1_over_batches(query_loader, test_model.PG, gnn, test_model.answering, 2, 'multi_class_classification')
+        acc_f1_over_batches(query_loader, test_model.PG, gnn, test_model.answering, 2, 'multi_class_classification', device='cpu')
         ## DO NOT DELETE the following content!
         # metric = torchmetrics.classification.Accuracy(task="binary")  # , num_labels=2)
         # for batch_id, query_batch in enumerate(query_loader):

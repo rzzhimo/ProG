@@ -3,26 +3,49 @@ import torch.optim as optim
 from torch.autograd import Variable
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
+from torch_geometric.nn import global_add_pool
 from random import shuffle
 import random
 
-from .prompt import GNN
-from .utils import gen_ran_output,load_data4pretrain,mkdir, graph_views
+from .prompt import GNN, CGCNN
+from .deep_gatgnn import DEEP_GATGNN
+from .utils import gen_ran_output,load_data4pretrain, mkdir, graph_views, load_mbdata4pretrain
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class GraphCL(torch.nn.Module):
 
     def __init__(self, gnn, hid_dim=16):
         super(GraphCL, self).__init__()
         self.gnn = gnn
-        self.projection_head = torch.nn.Sequential(torch.nn.Linear(hid_dim, hid_dim),
-                                                   torch.nn.ReLU(inplace=True),
-                                                   torch.nn.Linear(hid_dim, hid_dim))
+        if gnn.type == "CGCNN":
+            self.projection_head = torch.nn.Sequential(torch.nn.Linear(hid_dim, hid_dim),
+                                                    torch.nn.ReLU(inplace=True),
+                                                    torch.nn.Linear(hid_dim, hid_dim))
+        elif gnn.type == "deeperGAT":
+            self.projection_head = torch.nn.Sequential(torch.nn.Linear(hid_dim, hid_dim),
+                                                    torch.nn.ReLU(inplace=True),
+                                                    torch.nn.Linear(hid_dim, hid_dim))
+        else:
+            self.projection_head = torch.nn.Sequential(torch.nn.Linear(hid_dim, hid_dim),
+                                                    torch.nn.ReLU(inplace=True),
+                                                    torch.nn.Linear(hid_dim, hid_dim))
 
     def forward_cl(self, x, edge_index, batch):
         x = self.gnn(x, edge_index, batch)
         x = self.projection_head(x)
         return x
+    
+    def forward_cl_cgcnn(self, x, edge_index, edge_attr,  batch):
+        x = self.gnn(x, edge_index, edge_attr, batch)
+        x = self.projection_head(x)
+        return x
 
+    def forward_cl_deeperGAT(self, x, edge_index, edge_attr, glob_feat, batch):
+        x = self.gnn(x, edge_index, edge_attr, glob_feat, batch)
+        # x = self.projection_head(x)
+        return x
+    
     def loss_cl(self, x1, x2):
         T = 0.1
         batch_size, _ = x1.size()
@@ -35,6 +58,8 @@ class GraphCL(torch.nn.Module):
         loss = - torch.log(loss).mean() + 10
         return loss
 
+    def loss_mb(self):
+        None
 
 class PreTrain(torch.nn.Module):
     def __init__(self, pretext="GraphCL", gnn_type='TransformerConv',
@@ -43,9 +68,15 @@ class PreTrain(torch.nn.Module):
         self.pretext = pretext
         self.gnn_type=gnn_type
 
-        self.gnn = GNN(input_dim=input_dim, hid_dim=hid_dim, out_dim=hid_dim, gcn_layer_num=gln, pool=None,
+        if gnn_type == 'CGCNN':
+            self.gnn = CGCNN(input_node_dim=input_dim, input_edge_dim=50, hid_dim=hid_dim, out_dim=hid_dim, gcn_layer_num=gln, pool=None,
+                             gnn_type=gnn_type)
+        elif gnn_type == "deeperGAT":
+            self.gnn = DEEP_GATGNN(num_features=input_dim, dim1=100, dim2=100, num_edge_features=50, output_dim=100, gc_count=5)
+        else:
+            self.gnn = GNN(input_dim=input_dim, hid_dim=hid_dim, out_dim=hid_dim, gcn_layer_num=gln, pool=None,
                        gnn_type=gnn_type)
-
+        print(f"GNN:{self.gnn}")
         if pretext in ['GraphCL', 'SimGRACE']:
             self.model = GraphCL(self.gnn, hid_dim=hid_dim)
         else:
@@ -68,22 +99,36 @@ class PreTrain(torch.nn.Module):
                 aug_ratio = random.randint(1, 3) * 1.0 / 10  # 0.1,0.2,0.3
 
             print("===graph views: {} and {} with aug_ratio: {}".format(aug1, aug2, aug_ratio))
-
+            print(f"self.gnn_type:{self.gnn_type}")
             view_list_1 = []
             view_list_2 = []
+
             for g in graph_list:
+                # print(f"g:{g}")
                 view_g = graph_views(data=g, aug=aug1, aug_ratio=aug_ratio)
-                view_g = Data(x=view_g.x, edge_index=view_g.edge_index)
+                if  self.gnn_type == "CGCNN":
+                    view_g = Data(x=view_g.x, edge_index=view_g.edge_index, edge_attr=view_g.edge_attr)
+                    # print(f"view_g1:{view_g}")
+                elif self.gnn_type == "deeperGAT":
+                    view_g = Data(x=view_g.x, edge_index=view_g.edge_index, edge_attr=view_g.edge_attr, glob_feat=view_g.glob_feat)
+                else:
+                    view_g = Data(x=view_g.x, edge_index=view_g.edge_index)
                 view_list_1.append(view_g)
                 view_g = graph_views(data=g, aug=aug2, aug_ratio=aug_ratio)
-                view_g = Data(x=view_g.x, edge_index=view_g.edge_index)
+                if  self.gnn_type == "CGCNN":
+                    view_g = Data(x=view_g.x, edge_index=view_g.edge_index, edge_attr=view_g.edge_attr)
+                    # print(f"view_g2:{view_g}")
+                elif self.gnn_type == "deeperGAT":
+                    view_g = Data(x=view_g.x, edge_index=view_g.edge_index, edge_attr=view_g.edge_attr, glob_feat=view_g.glob_feat)
+                else:
+                    view_g = Data(x=view_g.x, edge_index=view_g.edge_index)
                 view_list_2.append(view_g)
 
             loader1 = DataLoader(view_list_1, batch_size=batch_size, shuffle=False,
                                  num_workers=1)  # you must set shuffle=False !
             loader2 = DataLoader(view_list_2, batch_size=batch_size, shuffle=False,
                                  num_workers=1)  # you must set shuffle=False !
-
+            
             return loader1, loader2
         elif pretext == 'SimGRACE':
             loader = DataLoader(graph_list, batch_size=batch_size, shuffle=False, num_workers=1)
@@ -99,7 +144,12 @@ class PreTrain(torch.nn.Module):
             optimizer.zero_grad()
             data = data.to(device)
             x2 = gen_ran_output(data, model) 
-            x1 = model.forward_cl(data.x, data.edge_index, data.batch)
+            if model.gnn.gnn_type == "CGCNN":
+                x1 = model.forward_cl_cgcnn(data.x, data.edge_index, data.edge_attr, data.batch)
+            elif model.gnn.gnn_type == "deeperGAT":
+                x1 = model.forward_cl_deeperGAT(data.x, data.edge_index, data.edge_attr, data.glob_feat, data.batch)
+            else:
+                x1 = model.forward_cl(data.x, data.edge_index, data.batch)
             x2 = Variable(x2.detach().data.to(device), requires_grad=False)
             loss = model.loss_cl(x1, x2)
             loss.backward()
@@ -116,8 +166,16 @@ class PreTrain(torch.nn.Module):
         for step, batch in enumerate(zip(loader1, loader2)):
             batch1, batch2 = batch
             optimizer.zero_grad()
-            x1 = model.forward_cl(batch1.x.to(device), batch1.edge_index.to(device), batch1.batch.to(device))
-            x2 = model.forward_cl(batch2.x.to(device), batch2.edge_index.to(device), batch2.batch.to(device))
+            if model.gnn.gnn_type == "CGCNN":
+                x1 = model.forward_cl_cgcnn(batch1.x.to(device), batch1.edge_index.to(device), batch1.edge_attr.to(device), batch1.batch.to(device))
+                x2 = model.forward_cl_cgcnn(batch2.x.to(device), batch2.edge_index.to(device), batch2.edge_attr.to(device), batch2.batch.to(device))
+            elif model.gnn.gnn_type == "deeperGAT":
+                x1 = model.forward_cl_deeperGAT(batch1.x.to(device), batch1.edge_index.to(device), batch1.edge_attr.to(device), batch1.glob_feat.to(device), batch1.batch.to(device))
+                x2 = model.forward_cl_deeperGAT(batch2.x.to(device), batch2.edge_index.to(device), batch2.edge_attr.to(device), batch2.glob_feat.to(device), batch2.batch.to(device))
+            else:
+                x1 = model.forward_cl(batch1.x.to(device), batch1.edge_index.to(device), batch1.batch.to(device))
+                x2 = model.forward_cl(batch2.x.to(device), batch2.edge_index.to(device), batch2.batch.to(device))
+                
             loss = model.loss_cl(x1, x2)
 
             loss.backward()
@@ -128,10 +186,13 @@ class PreTrain(torch.nn.Module):
 
         return train_loss_accum / total_step
 
+    def train_gcl_mb(self, model, loader1, loader2, optimizer):
+        None
+
     def train(self, dataname, graph_list, batch_size=10, aug1='dropN', aug2="permE", aug_ratio=None, lr=0.01,
               decay=0.0001, epochs=100):
 
-        loader1, loader2 = self.get_loader(graph_list, batch_size, aug1=aug1, aug2=aug2,
+        loader1, loader2 = self.get_loader(graph_list, batch_size, aug1=aug1, aug2=aug2, aug_ratio=aug_ratio,
                                            pretext=self.pretext)
         # print('start training {} | {} | {}...'.format(dataname, pre_train_method, gnn_type))
         optimizer = optim.Adam(self.model.parameters(), lr=lr, weight_decay=decay)
@@ -175,13 +236,16 @@ if __name__ == '__main__':
     # do not use '../pre_trained_gnn/' because hope there should be two folders: (1) '../pre_trained_gnn/'  and (2) './pre_trained_gnn/'
     # only selected pre-trained models will be moved into (1) so that we can keep reproduction
 
-    # pretext = 'GraphCL' 
-    pretext = 'SimGRACE' 
-    gnn_type = 'TransformerConv'  
+    pretext = 'GraphCL' 
+    # pretext = 'SimGRACE' 
+    # gnn_type = 'TransformerConv'  
     # gnn_type = 'GAT'
-    # gnn_type = 'GCN'
-    dataname, num_parts = 'CiteSeer', 200
-    graph_list, input_dim, hid_dim = load_data4pretrain(dataname, num_parts)
+    gnn_type = 'TransformerConv'
+
+    # dataname, num_parts = 'CiteSeer', 200
+    # graph_list, input_dim, hid_dim = load_data4pretrain(dataname, num_parts)
+    dataname = 'matbench_dielectric'
+    graph_list, input_dim, hid_dim = load_mbdata4pretrain(dataname)
 
     pt = PreTrain(pretext, gnn_type, input_dim, hid_dim, gln=2)
     pt.model.to(device) 
